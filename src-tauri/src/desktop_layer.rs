@@ -5,22 +5,25 @@ use tauri::Runtime;
 use windows::{
     core::{s, BOOL},
     Win32::{
-        Foundation::{HWND, LPARAM, RECT, WPARAM, MAX_PATH},
+        Foundation::{HWND, LPARAM, POINT, RECT, WPARAM, MAX_PATH},
+        Graphics::Dwm::DwmFlush,
         Graphics::Gdi::{
-            InvalidateRect, RedrawWindow, UpdateWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME,
-            RDW_INVALIDATE,
+            InvalidateRect, MapWindowPoints, RedrawWindow, UpdateWindow, RDW_ALLCHILDREN,
+            RDW_ERASE, RDW_ERASENOW, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
         },
         UI::{
             Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST},
             WindowsAndMessaging::{
-                EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
+                DestroyWindow, EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
                 GetWindowRect, IsWindowVisible, SendMessageTimeoutA, SetParent,
-                SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, GWL_STYLE,
-                HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
-                SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER, SWP_FRAMECHANGED, SWP_HIDEWINDOW,
-                SWP_NOACTIVATE, SWP_NOMOVE,
+                SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW,
+                GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SPIF_SENDCHANGE,
+                SPIF_UPDATEINIFILE, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER, SWP_FRAMECHANGED,
+                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
                 SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_CHILD,
-                WS_POPUP, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+                WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+                WS_POPUP, WS_SYSMENU, WS_THICKFRAME, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+                WM_SETREDRAW,
             },
         },
     },
@@ -187,12 +190,26 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
     unsafe {
         let old_parent = GetParent(hwnd).unwrap_or_default();
         let rect = current_window_rect(hwnd);
+        let dirty_rect = rect.and_then(|rect| map_desktop_rect_to_window(old_parent, rect));
 
-        // On Windows 10, hiding a WorkerW child can leave Explorer's wallpaper
-        // host with a stale composed bitmap. Detaching while still visible and
-        // moving the top-level window away makes Explorer repaint the old area.
-        set_top_level_window_style(hwnd);
+        // Win10 can keep the final WorkerW child frame as a stale wallpaper
+        // bitmap. Stop new paints, hide, flush DWM, then redraw the exact old
+        // area after removing the parent relationship.
+        let _ = SendMessageW(hwnd, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0)));
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+        );
+        let _ = DwmFlush();
+
         let _ = SetParent(hwnd, None);
+        set_top_level_window_style(hwnd);
 
         if let Some(rect) = rect {
             let width = (rect.right - rect.left).max(1);
@@ -206,7 +223,7 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
                 height,
                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE,
             );
-            refresh_desktop_shell(Some(old_parent));
+            refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
             thread::sleep(Duration::from_millis(120));
 
             let _ = SetWindowPos(
@@ -218,7 +235,7 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
                 0,
                 SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOACTIVATE,
             );
-            refresh_desktop_shell(Some(old_parent));
+            refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
             thread::sleep(Duration::from_millis(120));
         }
 
@@ -232,8 +249,10 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW,
         );
-        refresh_desktop_shell(Some(old_parent));
+        refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
         refresh_current_wallpaper();
+        let _ = DwmFlush();
+        let _ = DestroyWindow(hwnd);
     }
 
     Ok(())
@@ -316,16 +335,19 @@ unsafe fn collect_progman_worker_ws(progman: HWND, candidates: &mut Vec<HWND>) {
     }
 }
 
-unsafe fn refresh_desktop_shell(old_parent: Option<HWND>) {
+unsafe fn refresh_desktop_shell(old_parent: Option<HWND>, dirty_rect: Option<&RECT>) {
     if let Some(parent) = old_parent {
+        refresh_window_rect(parent, dirty_rect);
         refresh_window(parent);
     }
 
     let progman = FindWindowA(s!("Progman"), None).unwrap_or_default();
+    refresh_window_rect(progman, None);
     refresh_window(progman);
 
     if let Ok(candidates) = desktop_host_candidates() {
         for hwnd in candidates {
+            refresh_window_rect(hwnd, dirty_rect);
             refresh_window(hwnd);
         }
     }
@@ -338,6 +360,32 @@ unsafe fn current_window_rect(hwnd: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
     GetWindowRect(hwnd, &mut rect).ok()?;
     Some(rect)
+}
+
+unsafe fn map_desktop_rect_to_window(hwnd: HWND, rect: RECT) -> Option<RECT> {
+    if hwnd.is_invalid() {
+        return None;
+    }
+
+    let mut points = [
+        POINT {
+            x: rect.left,
+            y: rect.top,
+        },
+        POINT {
+            x: rect.right,
+            y: rect.bottom,
+        },
+    ];
+
+    MapWindowPoints(None, Some(hwnd), &mut points);
+
+    Some(RECT {
+        left: points[0].x,
+        top: points[0].y,
+        right: points[1].x,
+        bottom: points[1].y,
+    })
 }
 
 unsafe fn refresh_current_wallpaper() {
@@ -381,7 +429,23 @@ unsafe fn refresh_window(hwnd: HWND) {
         Some(hwnd),
         None,
         None,
-        RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN,
+        RDW_INVALIDATE | RDW_ERASE | RDW_ERASENOW | RDW_UPDATENOW | RDW_FRAME | RDW_ALLCHILDREN,
+    );
+    let _ = UpdateWindow(hwnd);
+}
+
+unsafe fn refresh_window_rect(hwnd: HWND, rect: Option<&RECT>) {
+    if hwnd.is_invalid() {
+        return;
+    }
+
+    let raw_rect = rect.map(|rect| rect as *const RECT);
+    let _ = InvalidateRect(Some(hwnd), raw_rect, true);
+    let _ = RedrawWindow(
+        Some(hwnd),
+        raw_rect,
+        None,
+        RDW_INVALIDATE | RDW_ERASE | RDW_ERASENOW | RDW_UPDATENOW | RDW_FRAME | RDW_ALLCHILDREN,
     );
     let _ = UpdateWindow(hwnd);
 }
@@ -401,7 +465,13 @@ extern "system" fn enum_windows_refresh_desktop_windows(window: HWND, _state: LP
 
 unsafe fn set_child_window_style(hwnd: HWND) {
     let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    let next_style = (style as u32 | WS_CHILD.0) & !WS_POPUP.0;
+    let next_style = (style as u32 | WS_CHILD.0 | WS_CLIPSIBLINGS.0 | WS_CLIPCHILDREN.0)
+        & !WS_POPUP.0
+        & !WS_CAPTION.0
+        & !WS_THICKFRAME.0
+        & !WS_SYSMENU.0
+        & !WS_MINIMIZEBOX.0
+        & !WS_MAXIMIZEBOX.0;
     SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
 }
 
