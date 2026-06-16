@@ -5,7 +5,7 @@ use tauri::Runtime;
 use windows::{
     core::{s, BOOL},
     Win32::{
-        Foundation::{HWND, LPARAM, WPARAM},
+        Foundation::{HWND, LPARAM, WPARAM, MAX_PATH},
         Graphics::Gdi::{
             InvalidateRect, RedrawWindow, UpdateWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME,
             RDW_INVALIDATE,
@@ -15,10 +15,11 @@ use windows::{
             WindowsAndMessaging::{
                 EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
                 IsWindowVisible, SendMessageTimeoutA, SetParent, SetWindowLongPtrW, SetWindowPos,
-                ShowWindow, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SWP_FRAMECHANGED,
-                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+                ShowWindow, SystemParametersInfoW, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL,
+                SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER,
+                SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
                 SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_CHILD,
-                WS_POPUP,
+                WS_POPUP, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
             },
         },
     },
@@ -197,6 +198,7 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW,
         );
         refresh_desktop_shell(Some(old_parent));
+        refresh_current_wallpaper();
     }
 
     Ok(())
@@ -295,6 +297,37 @@ unsafe fn refresh_desktop_shell(old_parent: Option<HWND>) {
 
     EnumWindows(Some(enum_windows_refresh_desktop_windows), LPARAM(0)).ok();
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+}
+
+unsafe fn refresh_current_wallpaper() {
+    let mut path = [0u16; MAX_PATH as usize];
+
+    let has_path = SystemParametersInfoW(
+        SPI_GETDESKWALLPAPER,
+        MAX_PATH,
+        Some(path.as_mut_ptr() as _),
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+    )
+    .is_ok()
+        && path.first().is_some_and(|value| *value != 0);
+
+    if has_path {
+        let _ = SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER,
+            0,
+            Some(path.as_mut_ptr() as _),
+            SPIF_SENDCHANGE | SPIF_UPDATEINIFILE,
+        );
+    } else {
+        let _ = SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER,
+            0,
+            None,
+            SPIF_SENDCHANGE | SPIF_UPDATEINIFILE,
+        );
+    }
+
+    thread::sleep(Duration::from_millis(250));
 }
 
 unsafe fn refresh_window(hwnd: HWND) {

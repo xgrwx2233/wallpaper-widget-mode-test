@@ -54,9 +54,6 @@ fn switch_to_detached(
 #[tauri::command]
 fn prepare_close_app(window: tauri::WebviewWindow, state: State<'_, ModeState>) {
     state.attached.store(false, Ordering::Relaxed);
-    let _ = detach_from_desktop_icon_layer(&window);
-    let _ = window.set_resizable(true);
-    let _ = window.set_skip_taskbar(false);
     let _ = window.emit("close-prepared", ());
 }
 
