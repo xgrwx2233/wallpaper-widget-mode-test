@@ -52,7 +52,10 @@ fn switch_to_detached(
 }
 
 #[tauri::command]
-fn close_app(app: tauri::AppHandle, state: State<'_, ModeState>) {
+fn close_app(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, ModeState>) {
+    state.attached.store(false, Ordering::Relaxed);
+    let _ = window.hide();
+    let _ = detach_from_desktop_icon_layer(&window);
     state.allow_exit.store(true, Ordering::Relaxed);
     app.exit(0);
 }
@@ -110,7 +113,21 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_app_handle, event| {
+        .run(move |app_handle, event| {
+            if let tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::CloseRequested { .. },
+                label,
+                ..
+            } = &event
+            {
+                if label == "widget" {
+                    if let Some(window) = app_handle.get_webview_window("widget") {
+                        let _ = window.hide();
+                        let _ = detach_from_desktop_icon_layer(&window);
+                    }
+                }
+            }
+
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 if !allow_exit.load(Ordering::Relaxed) {
                     api.prevent_exit();

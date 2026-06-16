@@ -62,10 +62,9 @@ fn desktop_host_candidates() -> Result<Vec<HWND>> {
         push_unique(&mut candidates, sibling_worker_w);
 
         collect_progman_worker_ws(progman, &mut candidates);
-        push_unique(&mut candidates, progman);
 
         if candidates.is_empty() {
-            Err("desktop host candidate not found".into())
+            Err("WorkerW desktop host candidate not found".into())
         } else {
             Ok(candidates)
         }
