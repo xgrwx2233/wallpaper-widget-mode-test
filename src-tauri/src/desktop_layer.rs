@@ -32,40 +32,43 @@ pub struct AttachDiagnostics {
     pub hwnd: isize,
     pub parent: isize,
     pub worker_w: isize,
+    pub candidate_count: usize,
     pub error: Option<String>,
 }
 
-fn find_wallpaper_worker_w() -> Result<HWND> {
+fn desktop_host_candidates() -> Result<Vec<HWND>> {
     unsafe {
         let progman = FindWindowA(s!("Progman"), None)?;
 
-        let _ = SendMessageTimeoutA(
-            progman,
-            WORKERW_SPAWN_MESSAGE,
-            WPARAM(0xD),
-            LPARAM(0x1),
-            SMTO_NORMAL,
-            1000,
-            None,
-        );
-
-        thread::sleep(Duration::from_millis(80));
-
-        let mut worker_w = HWND::default();
-        EnumWindows(
-            Some(enum_windows_find_desktop_host),
-            LPARAM(&mut worker_w as *mut HWND as isize),
-        )?;
-
-        if worker_w.is_invalid() {
-            worker_w =
-                FindWindowExA(Some(progman), None, s!("WorkerW"), None).unwrap_or_default();
+        for (wparam, lparam) in [(0xD, 0x1), (0, 0)] {
+            let _ = SendMessageTimeoutA(
+                progman,
+                WORKERW_SPAWN_MESSAGE,
+                WPARAM(wparam),
+                LPARAM(lparam),
+                SMTO_NORMAL,
+                1000,
+                None,
+            );
+            thread::sleep(Duration::from_millis(80));
         }
 
-        if worker_w.is_invalid() {
-            Err("WorkerW not found".into())
+        let mut candidates = Vec::new();
+
+        let mut sibling_worker_w = HWND::default();
+        EnumWindows(
+            Some(enum_windows_find_desktop_host),
+            LPARAM(&mut sibling_worker_w as *mut HWND as isize),
+        )?;
+        push_unique(&mut candidates, sibling_worker_w);
+
+        collect_progman_worker_ws(progman, &mut candidates);
+        push_unique(&mut candidates, progman);
+
+        if candidates.is_empty() {
+            Err("desktop host candidate not found".into())
         } else {
-            Ok(worker_w)
+            Ok(candidates)
         }
     }
 }
@@ -102,37 +105,50 @@ extern "system" fn enum_windows_find_desktop_host(window: HWND, state: LPARAM) -
 
 pub fn attach_to_desktop_icon_layer<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<()> {
     let hwnd = HWND(window.hwnd()?.0);
-    let worker_w = find_wallpaper_worker_w()?;
+    let candidates = desktop_host_candidates()?;
+    let mut attempted = Vec::new();
 
     unsafe {
         set_child_window_style(hwnd);
 
-        if GetParent(hwnd).ok() != Some(worker_w) {
-            let _ = SetParent(hwnd, Some(worker_w));
-        }
+        for candidate in candidates {
+            if candidate.is_invalid() {
+                continue;
+            }
 
-        let _ = SetWindowPos(
-            hwnd,
-            Some(HWND_BOTTOM),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOACTIVATE
-                | SWP_NOMOVE
-                | SWP_NOSIZE
-                | SWP_NOOWNERZORDER
-                | SWP_FRAMECHANGED
-                | SWP_SHOWWINDOW,
-        );
-        let _ = ShowWindow(hwnd, SW_SHOW);
+            attempted.push(format!("0x{:X}", candidate.0 as isize));
 
-        if GetParent(hwnd).ok() != Some(worker_w) {
-            return Err(format!("failed to parent window to WorkerW 0x{:X}", worker_w.0 as isize).into());
+            if GetParent(hwnd).ok() != Some(candidate) {
+                let _ = SetParent(hwnd, Some(candidate));
+            }
+
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_BOTTOM),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOOWNERZORDER
+                    | SWP_FRAMECHANGED
+                    | SWP_SHOWWINDOW,
+            );
+            let _ = ShowWindow(hwnd, SW_SHOW);
+
+            if GetParent(hwnd).ok() == Some(candidate) && IsWindowVisible(hwnd).as_bool() {
+                return Ok(());
+            }
         }
     }
 
-    Ok(())
+    Err(format!(
+        "failed to parent window to any desktop host; attempted {}",
+        attempted.join(", ")
+    )
+    .into())
 }
 
 pub fn detach_from_desktop_icon_layer<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<()> {
@@ -159,9 +175,12 @@ pub fn is_attached_to_desktop_icon_layer<R: Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<bool> {
     let hwnd = HWND(window.hwnd()?.0);
-    let worker_w = find_wallpaper_worker_w()?;
+    let candidates = desktop_host_candidates()?;
 
-    unsafe { Ok(GetParent(hwnd).ok() == Some(worker_w) && IsWindowVisible(hwnd).as_bool()) }
+    unsafe {
+        let parent = GetParent(hwnd).ok();
+        Ok(parent.is_some_and(|value| candidates.contains(&value)) && IsWindowVisible(hwnd).as_bool())
+    }
 }
 
 pub fn attach_diagnostics<R: Runtime>(window: &tauri::WebviewWindow<R>) -> AttachDiagnostics {
@@ -190,13 +209,14 @@ pub fn attach_diagnostics<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Attac
 
     diagnostics.hwnd = hwnd.0 as isize;
 
-    match find_wallpaper_worker_w() {
-        Ok(worker_w) => unsafe {
+    match desktop_host_candidates() {
+        Ok(candidates) => unsafe {
             diagnostics.worker_found = true;
-            diagnostics.worker_w = worker_w.0 as isize;
+            diagnostics.candidate_count = candidates.len();
+            diagnostics.worker_w = candidates.first().map(|hwnd| hwnd.0 as isize).unwrap_or(0);
             let parent = GetParent(hwnd).unwrap_or_default();
             diagnostics.parent = parent.0 as isize;
-            diagnostics.parent_is_worker_w = parent == worker_w;
+            diagnostics.parent_is_worker_w = candidates.contains(&parent);
             diagnostics.visible = IsWindowVisible(hwnd).as_bool();
             diagnostics.attached = diagnostics.parent_is_worker_w && diagnostics.visible;
         },
@@ -206,6 +226,26 @@ pub fn attach_diagnostics<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Attac
     }
 
     diagnostics
+}
+
+fn push_unique(candidates: &mut Vec<HWND>, hwnd: HWND) {
+    if !hwnd.is_invalid() && !candidates.contains(&hwnd) {
+        candidates.push(hwnd);
+    }
+}
+
+unsafe fn collect_progman_worker_ws(progman: HWND, candidates: &mut Vec<HWND>) {
+    let mut previous: Option<HWND> = None;
+
+    loop {
+        let next = FindWindowExA(Some(progman), previous, s!("WorkerW"), None).unwrap_or_default();
+        if next.is_invalid() {
+            break;
+        }
+
+        push_unique(candidates, next);
+        previous = Some(next);
+    }
 }
 
 unsafe fn set_child_window_style(hwnd: HWND) {

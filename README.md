@@ -37,8 +37,8 @@ npm run tauri:build
 ## 交互验证
 
 - 默认尝试 attached 启动；如果当前 Explorer/WorkerW 状态不可用，会兜底为 detached，不会直接退出。
-- Windows 11 下已兼容两种 Explorer 桌面层：标准 `WorkerW` 兄弟窗口，以及 `Progman` 下的 Raised Desktop `WorkerW`。
-- 界面中的 `Diag` 按钮会刷新诊断行：`StdWorker`、`ProgWorker`、`ParentOK`、`Visible` 可用于判断 attached 失败位置。
+- attach 会按顺序尝试多个桌面宿主候选：`SHELLDLL_DefView` 后的兄弟 `WorkerW`、`Progman` 子 `WorkerW`，最后尝试 `Progman`。
+- 界面中的 `Diag` 按钮会刷新诊断行：`StdWorker`、`ProgWorker`、`Hosts`、`ParentOK`、`Visible` 可用于判断 attached 失败位置。
 - 在 attached 模式下，单击面板会通过 Rust `desktop-input` 转发计数。
 - 单击 `Detach` 切到普通窗口。
 - detached 模式下可拖动顶部区域、拖右下角缩放，单击面板由 DOM click 计数。

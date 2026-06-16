@@ -29,9 +29,6 @@ struct DesktopInputEvent {
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum DesktopInputKind {
-    Hover,
-    Leave,
-    Move,
     Click,
 }
 
@@ -45,15 +42,11 @@ pub fn start_input_forwarder<R: Runtime>(
             Err(_) => return,
         };
 
-        let mut was_inside = false;
         let mut was_left_down = false;
-        let mut last_local = POINT { x: -1, y: -1 };
 
         loop {
             if !attached_mode.load(Ordering::Relaxed) {
-                was_inside = false;
                 was_left_down = false;
-                last_local = POINT { x: -1, y: -1 };
                 thread::sleep(Duration::from_millis(50));
                 continue;
             }
@@ -81,22 +74,12 @@ pub fn start_input_forwarder<R: Runtime>(
             };
             let left_down = unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 };
 
-            if inside && !was_inside {
-                emit_input(&window, DesktopInputKind::Hover, local, width, height);
-            } else if !inside && was_inside {
-                emit_input(&window, DesktopInputKind::Leave, local, width, height);
-            } else if inside && (local.x != last_local.x || local.y != last_local.y) {
-                emit_input(&window, DesktopInputKind::Move, local, width, height);
-            }
-
             if inside && left_down && !was_left_down {
                 emit_input(&window, DesktopInputKind::Click, local, width, height);
             }
 
-            was_inside = inside;
             was_left_down = left_down;
-            last_local = local;
-            thread::sleep(Duration::from_millis(16));
+            thread::sleep(Duration::from_millis(24));
         }
     });
 }

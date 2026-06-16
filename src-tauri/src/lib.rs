@@ -89,8 +89,8 @@ pub fn run() {
                 y: 120,
             }))?;
             window.set_size(Size::Physical(tauri::PhysicalSize {
-                width: 560,
-                height: 260,
+                width: 760,
+                height: 420,
             }))?;
 
             window.show()?;

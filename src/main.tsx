@@ -8,7 +8,7 @@ import "./styles.css";
 type Mode = "attached" | "detached";
 
 type DesktopInputEvent = {
-  kind: "hover" | "leave" | "move" | "click";
+  kind: "click";
   x: number;
   y: number;
   width: number;
@@ -26,6 +26,7 @@ type AttachDiagnostics = {
   hwnd: number;
   parent: number;
   workerW: number;
+  candidateCount: number;
   error: string | null;
 };
 
@@ -40,6 +41,7 @@ const emptyDiagnostics: AttachDiagnostics = {
   hwnd: 0,
   parent: 0,
   workerW: 0,
+  candidateCount: 0,
   error: null
 };
 
@@ -74,17 +76,10 @@ function App() {
       const payload = event.payload;
       setPoint({ x: payload.x, y: payload.y });
 
-      if (payload.kind === "leave") {
-        setHovered(false);
-        setLastEvent("leave");
-        return;
-      }
-
-      setHovered(true);
-      setLastEvent(payload.kind);
-
       if (payload.kind === "click") {
         setClicks((current) => current + 1);
+        setHovered(true);
+        setLastEvent("click");
 
         const cssX = payload.x / scaleFactorRef.current;
         const cssY = payload.y / scaleFactorRef.current;
@@ -139,8 +134,6 @@ function App() {
     }
 
     const rect = panelRef.current?.getBoundingClientRect();
-    setHovered(true);
-    setLastEvent("move");
     setPoint({
       x: Math.round(event.clientX - (rect?.left ?? 0)),
       y: Math.round(event.clientY - (rect?.top ?? 0))
@@ -153,7 +146,6 @@ function App() {
     }
 
     setHovered(false);
-    setLastEvent("leave");
   };
 
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -238,6 +230,7 @@ function App() {
         <span>ProgWorker {yesNo(diagnostics.progmanWorkerFound)}</span>
         <span>ParentOK {yesNo(diagnostics.parentIsWorkerW)}</span>
         <span>Visible {yesNo(diagnostics.visible)}</span>
+        <span>Hosts {diagnostics.candidateCount}</span>
         <span>Worker 0x{diagnostics.workerW.toString(16)}</span>
       </section>
 
