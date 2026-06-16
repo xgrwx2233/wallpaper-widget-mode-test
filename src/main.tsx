@@ -50,6 +50,8 @@ function App() {
   const switchButtonRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const scaleFactorRef = useRef(1);
+  const closingRef = useRef(false);
+  const finishScheduledRef = useRef(false);
 
   const [mode, setMode] = useState<Mode>("attached");
   const [hovered, setHovered] = useState(false);
@@ -72,7 +74,7 @@ function App() {
 
     void refreshDiagnostics();
 
-    const unlistenPromise = listen<DesktopInputEvent>("desktop-input", (event) => {
+    const inputUnlistenPromise = listen<DesktopInputEvent>("desktop-input", (event) => {
       const payload = event.payload;
       setPoint({ x: payload.x, y: payload.y });
 
@@ -96,9 +98,15 @@ function App() {
         }
       }
     });
+    const closeUnlistenPromise = listen("close-prepared", () => {
+      setMode("detached");
+      setLastEvent("closing");
+      scheduleFinishClose(180);
+    });
 
     return () => {
-      void unlistenPromise.then((unlisten) => unlisten());
+      void inputUnlistenPromise.then((unlisten) => unlisten());
+      void closeUnlistenPromise.then((unlisten) => unlisten());
     };
   }, [appWindow]);
 
@@ -125,7 +133,25 @@ function App() {
   };
 
   const closeApp = async () => {
-    await invoke("close_app");
+    if (closingRef.current) {
+      return;
+    }
+
+    closingRef.current = true;
+    setLastEvent("closing");
+    await invoke("prepare_close_app");
+    scheduleFinishClose(320);
+  };
+
+  const scheduleFinishClose = (delay: number) => {
+    if (finishScheduledRef.current) {
+      return;
+    }
+
+    finishScheduledRef.current = true;
+    window.setTimeout(() => {
+      void invoke("finish_close_app");
+    }, delay);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {

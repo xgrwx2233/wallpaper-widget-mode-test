@@ -15,7 +15,7 @@ use desktop_layer::{
     detach_from_desktop_icon_layer, is_attached_to_desktop_icon_layer, AttachDiagnostics,
 };
 use input_forwarder::start_input_forwarder;
-use tauri::{Manager, Position, Size, State};
+use tauri::{Emitter, Manager, Position, Size, State};
 
 struct ModeState {
     attached: Arc<AtomicBool>,
@@ -52,11 +52,20 @@ fn switch_to_detached(
 }
 
 #[tauri::command]
-fn close_app(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, ModeState>) {
+fn prepare_close_app(window: tauri::WebviewWindow, state: State<'_, ModeState>) {
+    state.attached.store(false, Ordering::Relaxed);
+    let _ = detach_from_desktop_icon_layer(&window);
+    let _ = window.set_resizable(true);
+    let _ = window.set_skip_taskbar(false);
+    let _ = window.emit("close-prepared", ());
+}
+
+#[tauri::command]
+fn finish_close_app(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, ModeState>) {
     state.attached.store(false, Ordering::Relaxed);
     state.allow_exit.store(true, Ordering::Relaxed);
-    let _ = window.hide();
     let _ = cleanup_desktop_layer_before_exit(&window);
+    let _ = window.hide();
     app.exit(0);
 }
 
@@ -79,7 +88,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             switch_to_attached,
             switch_to_detached,
-            close_app,
+            prepare_close_app,
+            finish_close_app,
             get_attach_diagnostics
         ])
         .setup(move |app| {
