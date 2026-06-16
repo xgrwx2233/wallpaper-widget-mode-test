@@ -1,0 +1,142 @@
+mod desktop_layer;
+mod input_forwarder;
+
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
+
+use desktop_layer::{
+    attach_diagnostics, attach_to_desktop_icon_layer, detach_from_desktop_icon_layer,
+    is_attached_to_desktop_icon_layer, AttachDiagnostics,
+};
+use input_forwarder::start_input_forwarder;
+use tauri::{Manager, Position, Size, State};
+
+struct ModeState {
+    attached: Arc<AtomicBool>,
+    allow_exit: Arc<AtomicBool>,
+}
+
+#[tauri::command]
+fn switch_to_attached(
+    window: tauri::WebviewWindow,
+    state: State<'_, ModeState>,
+) -> Result<AttachDiagnostics, String> {
+    window.set_resizable(false).map_err(|error| error.to_string())?;
+    window
+        .set_skip_taskbar(true)
+        .map_err(|error| error.to_string())?;
+    attach_to_desktop_icon_layer(&window).map_err(|error| error.to_string())?;
+    state.attached.store(true, Ordering::Relaxed);
+    Ok(attach_diagnostics(&window))
+}
+
+#[tauri::command]
+fn switch_to_detached(
+    window: tauri::WebviewWindow,
+    state: State<'_, ModeState>,
+) -> Result<(), String> {
+    state.attached.store(false, Ordering::Relaxed);
+    detach_from_desktop_icon_layer(&window).map_err(|error| error.to_string())?;
+    window.set_resizable(true).map_err(|error| error.to_string())?;
+    window
+        .set_skip_taskbar(false)
+        .map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn close_app(app: tauri::AppHandle, state: State<'_, ModeState>) {
+    state.allow_exit.store(true, Ordering::Relaxed);
+    app.exit(0);
+}
+
+#[tauri::command]
+fn get_attach_diagnostics(window: tauri::WebviewWindow) -> AttachDiagnostics {
+    attach_diagnostics(&window)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let attached = Arc::new(AtomicBool::new(true));
+    let allow_exit = Arc::new(AtomicBool::new(false));
+    let attached_for_setup = Arc::clone(&attached);
+
+    tauri::Builder::default()
+        .manage(ModeState {
+            attached: Arc::clone(&attached),
+            allow_exit: Arc::clone(&allow_exit),
+        })
+        .invoke_handler(tauri::generate_handler![
+            switch_to_attached,
+            switch_to_detached,
+            close_app,
+            get_attach_diagnostics
+        ])
+        .setup(move |app| {
+            let window = app
+                .get_webview_window("widget")
+                .ok_or("widget window was not created")?;
+
+            window.set_position(Position::Physical(tauri::PhysicalPosition {
+                x: 220,
+                y: 120,
+            }))?;
+            window.set_size(Size::Physical(tauri::PhysicalSize {
+                width: 560,
+                height: 260,
+            }))?;
+
+            window.show()?;
+
+            if let Err(error) = attach_to_desktop_icon_layer(&window) {
+                eprintln!("initial desktop attach failed, starting detached: {error}");
+                attached_for_setup.store(false, Ordering::Relaxed);
+                let _ = detach_from_desktop_icon_layer(&window);
+                let _ = window.set_resizable(true);
+                let _ = window.set_skip_taskbar(false);
+            }
+
+            start_input_forwarder(window.clone(), Arc::clone(&attached_for_setup));
+            start_desktop_layer_guard(window, Arc::clone(&attached_for_setup));
+
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if !allow_exit.load(Ordering::Relaxed) {
+                    api.prevent_exit();
+                }
+            }
+        });
+}
+
+fn start_desktop_layer_guard(window: tauri::WebviewWindow, attached: Arc<AtomicBool>) {
+    thread::spawn(move || loop {
+        if !attached.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+
+        let attached_and_visible = is_attached_to_desktop_icon_layer(&window).unwrap_or(false);
+        if !attached_and_visible {
+            if let Err(error) = attach_to_desktop_icon_layer(&window) {
+                eprintln!("failed to restore desktop layer: {error}");
+            }
+
+            if let Err(error) = window.show() {
+                eprintln!("failed to show widget window: {error}");
+            }
+        }
+
+        thread::sleep(Duration::from_millis(1000));
+    });
+}
