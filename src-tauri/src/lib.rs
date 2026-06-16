@@ -11,8 +11,8 @@ use std::{
 };
 
 use desktop_layer::{
-    attach_diagnostics, attach_to_desktop_icon_layer, detach_from_desktop_icon_layer,
-    is_attached_to_desktop_icon_layer, AttachDiagnostics,
+    attach_diagnostics, attach_to_desktop_icon_layer, cleanup_desktop_layer_before_exit,
+    detach_from_desktop_icon_layer, is_attached_to_desktop_icon_layer, AttachDiagnostics,
 };
 use input_forwarder::start_input_forwarder;
 use tauri::{Manager, Position, Size, State};
@@ -54,9 +54,9 @@ fn switch_to_detached(
 #[tauri::command]
 fn close_app(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, ModeState>) {
     state.attached.store(false, Ordering::Relaxed);
-    let _ = window.hide();
-    let _ = detach_from_desktop_icon_layer(&window);
     state.allow_exit.store(true, Ordering::Relaxed);
+    let _ = window.hide();
+    let _ = cleanup_desktop_layer_before_exit(&window);
     app.exit(0);
 }
 
@@ -121,9 +121,12 @@ pub fn run() {
             } = &event
             {
                 if label == "widget" {
+                    let state = app_handle.state::<ModeState>();
+                    state.attached.store(false, Ordering::Relaxed);
+                    state.allow_exit.store(true, Ordering::Relaxed);
                     if let Some(window) = app_handle.get_webview_window("widget") {
                         let _ = window.hide();
-                        let _ = detach_from_desktop_icon_layer(&window);
+                        let _ = cleanup_desktop_layer_before_exit(&window);
                     }
                 }
             }
@@ -131,6 +134,9 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 if !allow_exit.load(Ordering::Relaxed) {
                     api.prevent_exit();
+                } else if let Some(window) = app_handle.get_webview_window("widget") {
+                    let _ = window.hide();
+                    let _ = cleanup_desktop_layer_before_exit(&window);
                 }
             }
         });

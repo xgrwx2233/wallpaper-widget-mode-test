@@ -11,7 +11,7 @@ use windows::{
             IsWindowVisible, SendMessageTimeoutA, SetParent, SetWindowLongPtrW, SetWindowPos,
             ShowWindow, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL,
             SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-            SWP_SHOWWINDOW, SW_SHOW, WS_CHILD, WS_POPUP,
+            SWP_HIDEWINDOW, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_CHILD, WS_POPUP,
         },
     },
 };
@@ -163,6 +163,29 @@ pub fn detach_from_desktop_icon_layer<R: Runtime>(window: &tauri::WebviewWindow<
             0,
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+        );
+    }
+
+    Ok(())
+}
+
+pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<()> {
+    let hwnd = HWND(window.hwnd()?.0);
+
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        set_top_level_window_style(hwnd);
+        let _ = SetParent(hwnd, None);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW,
         );
     }
 
