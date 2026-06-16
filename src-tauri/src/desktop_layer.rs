@@ -39,6 +39,7 @@ pub struct AttachDiagnostics {
 fn desktop_host_candidates() -> Result<Vec<HWND>> {
     unsafe {
         let progman = FindWindowA(s!("Progman"), None)?;
+        let mut candidates = Vec::new();
 
         for (wparam, lparam) in [(0xD, 0x1), (0, 0)] {
             let _ = SendMessageTimeoutA(
@@ -53,13 +54,11 @@ fn desktop_host_candidates() -> Result<Vec<HWND>> {
             thread::sleep(Duration::from_millis(80));
         }
 
-        let mut candidates = Vec::new();
-
         let mut sibling_worker_w = HWND::default();
-        EnumWindows(
+        let _ = EnumWindows(
             Some(enum_windows_find_desktop_host),
             LPARAM(&mut sibling_worker_w as *mut HWND as isize),
-        )?;
+        );
         push_unique(&mut candidates, sibling_worker_w);
 
         collect_progman_worker_ws(progman, &mut candidates);

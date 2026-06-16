@@ -177,7 +177,7 @@ button.danger:hover {
 .diagnostics {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   color: rgba(245, 247, 247, 0.64);
   font-size: 11px;
@@ -188,6 +188,11 @@ button.danger:hover {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.diagnostic-error {
+  grid-column: span 4;
+  color: rgba(255, 190, 120, 0.9);
 }
 
 p {

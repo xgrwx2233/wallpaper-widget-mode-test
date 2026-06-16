@@ -232,6 +232,7 @@ function App() {
         <span>Visible {yesNo(diagnostics.visible)}</span>
         <span>Hosts {diagnostics.candidateCount}</span>
         <span>Worker 0x{diagnostics.workerW.toString(16)}</span>
+        <span className="diagnostic-error">{diagnostics.error ?? ""}</span>
       </section>
 
       <p>
