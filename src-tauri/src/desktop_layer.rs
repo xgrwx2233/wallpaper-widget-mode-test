@@ -5,7 +5,7 @@ use tauri::Runtime;
 use windows::{
     core::{s, BOOL},
     Win32::{
-        Foundation::{HWND, LPARAM, WPARAM, MAX_PATH},
+        Foundation::{HWND, LPARAM, RECT, WPARAM, MAX_PATH},
         Graphics::Gdi::{
             InvalidateRect, RedrawWindow, UpdateWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME,
             RDW_INVALIDATE,
@@ -14,10 +14,11 @@ use windows::{
             Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST},
             WindowsAndMessaging::{
                 EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
-                IsWindowVisible, SendMessageTimeoutA, SetParent, SetWindowLongPtrW, SetWindowPos,
-                ShowWindow, SystemParametersInfoW, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL,
-                SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER,
-                SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+                GetWindowRect, IsWindowVisible, SendMessageTimeoutA, SetParent,
+                SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, GWL_STYLE,
+                HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
+                SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER, SWP_FRAMECHANGED, SWP_HIDEWINDOW,
+                SWP_NOACTIVATE, SWP_NOMOVE,
                 SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_CHILD,
                 WS_POPUP, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
             },
@@ -185,9 +186,43 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
 
     unsafe {
         let old_parent = GetParent(hwnd).unwrap_or_default();
-        let _ = ShowWindow(hwnd, SW_HIDE);
+        let rect = current_window_rect(hwnd);
+
+        // On Windows 10, hiding a WorkerW child can leave Explorer's wallpaper
+        // host with a stale composed bitmap. Detaching while still visible and
+        // moving the top-level window away makes Explorer repaint the old area.
         set_top_level_window_style(hwnd);
         let _ = SetParent(hwnd, None);
+
+        if let Some(rect) = rect {
+            let width = (rect.right - rect.left).max(1);
+            let height = (rect.bottom - rect.top).max(1);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOP),
+                rect.left,
+                rect.top,
+                width,
+                height,
+                SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+            );
+            refresh_desktop_shell(Some(old_parent));
+            thread::sleep(Duration::from_millis(120));
+
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOP),
+                -32000,
+                -32000,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+            );
+            refresh_desktop_shell(Some(old_parent));
+            thread::sleep(Duration::from_millis(120));
+        }
+
+        let _ = ShowWindow(hwnd, SW_HIDE);
         let _ = SetWindowPos(
             hwnd,
             Some(HWND_TOP),
@@ -297,6 +332,12 @@ unsafe fn refresh_desktop_shell(old_parent: Option<HWND>) {
 
     EnumWindows(Some(enum_windows_refresh_desktop_windows), LPARAM(0)).ok();
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+}
+
+unsafe fn current_window_rect(hwnd: HWND) -> Option<RECT> {
+    let mut rect = RECT::default();
+    GetWindowRect(hwnd, &mut rect).ok()?;
+    Some(rect)
 }
 
 unsafe fn refresh_current_wallpaper() {

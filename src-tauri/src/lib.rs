@@ -132,8 +132,8 @@ pub fn run() {
                     state.attached.store(false, Ordering::Relaxed);
                     state.allow_exit.store(true, Ordering::Relaxed);
                     if let Some(window) = app_handle.get_webview_window("widget") {
-                        let _ = window.hide();
                         let _ = cleanup_desktop_layer_before_exit(&window);
+                        let _ = window.hide();
                     }
                 }
             }
@@ -142,8 +142,8 @@ pub fn run() {
                 if !allow_exit.load(Ordering::Relaxed) {
                     api.prevent_exit();
                 } else if let Some(window) = app_handle.get_webview_window("widget") {
-                    let _ = window.hide();
                     let _ = cleanup_desktop_layer_before_exit(&window);
+                    let _ = window.hide();
                 }
             }
         });
