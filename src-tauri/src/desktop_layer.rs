@@ -6,12 +6,20 @@ use windows::{
     core::{s, BOOL},
     Win32::{
         Foundation::{HWND, LPARAM, WPARAM},
-        UI::WindowsAndMessaging::{
-            EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
-            IsWindowVisible, SendMessageTimeoutA, SetParent, SetWindowLongPtrW, SetWindowPos,
-            ShowWindow, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL,
-            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-            SWP_HIDEWINDOW, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_CHILD, WS_POPUP,
+        Graphics::Gdi::{
+            InvalidateRect, RedrawWindow, UpdateWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME,
+            RDW_INVALIDATE,
+        },
+        UI::{
+            Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST},
+            WindowsAndMessaging::{
+                EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
+                IsWindowVisible, SendMessageTimeoutA, SetParent, SetWindowLongPtrW, SetWindowPos,
+                ShowWindow, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SWP_FRAMECHANGED,
+                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_CHILD,
+                WS_POPUP,
+            },
         },
     },
 };
@@ -175,6 +183,7 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
     let hwnd = HWND(window.hwnd()?.0);
 
     unsafe {
+        let old_parent = GetParent(hwnd).unwrap_or_default();
         let _ = ShowWindow(hwnd, SW_HIDE);
         set_top_level_window_style(hwnd);
         let _ = SetParent(hwnd, None);
@@ -187,6 +196,7 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW,
         );
+        refresh_desktop_shell(Some(old_parent));
     }
 
     Ok(())
@@ -267,6 +277,52 @@ unsafe fn collect_progman_worker_ws(progman: HWND, candidates: &mut Vec<HWND>) {
         push_unique(candidates, next);
         previous = Some(next);
     }
+}
+
+unsafe fn refresh_desktop_shell(old_parent: Option<HWND>) {
+    if let Some(parent) = old_parent {
+        refresh_window(parent);
+    }
+
+    let progman = FindWindowA(s!("Progman"), None).unwrap_or_default();
+    refresh_window(progman);
+
+    if let Ok(candidates) = desktop_host_candidates() {
+        for hwnd in candidates {
+            refresh_window(hwnd);
+        }
+    }
+
+    EnumWindows(Some(enum_windows_refresh_desktop_windows), LPARAM(0)).ok();
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+}
+
+unsafe fn refresh_window(hwnd: HWND) {
+    if hwnd.is_invalid() {
+        return;
+    }
+
+    let _ = InvalidateRect(Some(hwnd), None, true);
+    let _ = RedrawWindow(
+        Some(hwnd),
+        None,
+        None,
+        RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN,
+    );
+    let _ = UpdateWindow(hwnd);
+}
+
+extern "system" fn enum_windows_refresh_desktop_windows(window: HWND, _state: LPARAM) -> BOOL {
+    unsafe {
+        let shell_view =
+            FindWindowExA(Some(window), None, s!("SHELLDLL_DefView"), None).unwrap_or_default();
+        if !shell_view.is_invalid() {
+            refresh_window(window);
+            refresh_window(shell_view);
+        }
+    }
+
+    BOOL(1)
 }
 
 unsafe fn set_child_window_style(hwnd: HWND) {
