@@ -27,7 +27,36 @@ type AttachDiagnostics = {
   parent: number;
   workerW: number;
   candidateCount: number;
+  className: string;
+  title: string;
+  styleHex: string;
+  exStyleHex: string;
+  windowRect: RectDiagnostics;
+  clientRect: RectDiagnostics;
+  foreground: number;
+  isForeground: boolean;
+  nativeHookInstalled: boolean;
+  nativeMsg: string;
+  phase: string;
   error: string | null;
+};
+
+type RectDiagnostics = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+};
+
+const emptyRect: RectDiagnostics = {
+  left: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
+  width: 0,
+  height: 0
 };
 
 const emptyDiagnostics: AttachDiagnostics = {
@@ -42,6 +71,17 @@ const emptyDiagnostics: AttachDiagnostics = {
   parent: 0,
   workerW: 0,
   candidateCount: 0,
+  className: "",
+  title: "",
+  styleHex: "",
+  exStyleHex: "",
+  windowRect: emptyRect,
+  clientRect: emptyRect,
+  foreground: 0,
+  isForeground: false,
+  nativeHookInstalled: false,
+  nativeMsg: "",
+  phase: "",
   error: null
 };
 
@@ -49,21 +89,55 @@ function App() {
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const switchButtonRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
+  const debugSeqRef = useRef(0);
+  const modeRef = useRef<Mode>("attached");
+  const diagnosticsRef = useRef<AttachDiagnostics>(emptyDiagnostics);
   const scaleFactorRef = useRef(1);
   const closingRef = useRef(false);
   const finishScheduledRef = useRef(false);
 
   const [mode, setMode] = useState<Mode>("attached");
-  const [hovered, setHovered] = useState(false);
   const [clicks, setClicks] = useState(0);
   const [lastEvent, setLastEvent] = useState("started");
   const [point, setPoint] = useState({ x: 0, y: 0 });
   const [diagnostics, setDiagnostics] = useState<AttachDiagnostics>(emptyDiagnostics);
+  const [debugLines, setDebugLines] = useState<string[]>([]);
+
+  const appendDebug = (label: string, data?: Partial<AttachDiagnostics>) => {
+    const seq = ++debugSeqRef.current;
+    const source = data ?? diagnosticsRef.current;
+    const currentMode = modeRef.current;
+    const line = [
+      `${seq}. ${label}`,
+      `mode=${currentMode}`,
+      `phase=${source.phase ?? ""}`,
+      `hwnd=${hex(source.hwnd)}`,
+      `parent=${hex(source.parent)}`,
+      `worker=${hex(source.workerW)}`,
+      `attached=${yesNo(Boolean(source.attached))}`,
+      `visible=${yesNo(Boolean(source.visible))}`,
+      `style=${source.styleHex ?? ""}`,
+      `ex=${source.exStyleHex ?? ""}`,
+      `rect=${rectText(source.windowRect)}`,
+      `client=${rectText(source.clientRect)}`,
+      `fg=${yesNo(Boolean(source.isForeground))}`,
+      `hook=${yesNo(Boolean(source.nativeHookInstalled))}`,
+      `native=${source.nativeMsg ?? ""}`,
+      `n=${source.nativeCount ?? 0}`,
+      `title="${source.title ?? ""}"`,
+      `class=${source.className ?? ""}`
+    ].join(" | ");
+
+    setDebugLines((current) => [line, ...current].slice(0, 18));
+  };
 
   const refreshDiagnostics = async () => {
     const next = await invoke<AttachDiagnostics>("get_attach_diagnostics");
     setDiagnostics(next);
     setMode(next.attached ? "attached" : "detached");
+    diagnosticsRef.current = next;
+    modeRef.current = next.attached ? "attached" : "detached";
+    appendDebug("manual diag", next);
     return next;
   };
 
@@ -80,8 +154,8 @@ function App() {
 
       if (payload.kind === "click") {
         setClicks((current) => current + 1);
-        setHovered(true);
         setLastEvent("click");
+        appendDebug(`attached click x=${payload.x} y=${payload.y}`);
 
         const cssX = payload.x / scaleFactorRef.current;
         const cssY = payload.y / scaleFactorRef.current;
@@ -100,26 +174,38 @@ function App() {
     });
     const closeUnlistenPromise = listen("close-prepared", () => {
       setMode("detached");
+      modeRef.current = "detached";
       setLastEvent("closing");
+      appendDebug("close-prepared");
       scheduleFinishClose(1200);
+    });
+    const debugUnlistenPromise = listen<AttachDiagnostics>("debug-snapshot", (event) => {
+      setDiagnostics(event.payload);
+      appendDebug("backend", event.payload);
     });
 
     return () => {
       void inputUnlistenPromise.then((unlisten) => unlisten());
       void closeUnlistenPromise.then((unlisten) => unlisten());
+      void debugUnlistenPromise.then((unlisten) => unlisten());
     };
   }, [appWindow]);
 
   const switchMode = async (target?: Mode) => {
     const nextMode = target ?? (mode === "attached" ? "detached" : "attached");
+    appendDebug(`switch request ${mode}->${nextMode}`);
     if (nextMode === "attached") {
       try {
         const result = await invoke<AttachDiagnostics>("switch_to_attached");
         setDiagnostics(result);
+        diagnosticsRef.current = result;
+        modeRef.current = result.attached ? "attached" : "detached";
         setMode(result.attached ? "attached" : "detached");
         setLastEvent(result.attached ? "attached" : "attach failed");
+        appendDebug("switch attached result", result);
       } catch (error) {
         setLastEvent(`attach failed: ${String(error)}`);
+        appendDebug(`switch attached error ${String(error)}`);
         void refreshDiagnostics();
       }
       return;
@@ -127,8 +213,9 @@ function App() {
 
     await invoke("switch_to_detached");
     setMode("detached");
-    setHovered(false);
+    modeRef.current = "detached";
     setLastEvent("detached");
+    appendDebug("switch detached result");
     void refreshDiagnostics();
   };
 
@@ -139,6 +226,8 @@ function App() {
 
     closingRef.current = true;
     setLastEvent("closing");
+    modeRef.current = "detached";
+    appendDebug("close request");
     await invoke("prepare_close_app");
     setMode("detached");
     scheduleFinishClose(1200);
@@ -167,14 +256,6 @@ function App() {
     });
   };
 
-  const handlePointerLeave = () => {
-    if (mode !== "detached") {
-      return;
-    }
-
-    setHovered(false);
-  };
-
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
     if (mode !== "detached") {
       return;
@@ -182,8 +263,8 @@ function App() {
 
     const rect = panelRef.current?.getBoundingClientRect();
     setClicks((current) => current + 1);
-    setHovered(true);
     setLastEvent("click");
+    appendDebug(`detached click x=${Math.round(event.clientX)} y=${Math.round(event.clientY)}`);
     setPoint({
       x: Math.round(event.clientX - (rect?.left ?? 0)),
       y: Math.round(event.clientY - (rect?.top ?? 0))
@@ -192,6 +273,7 @@ function App() {
 
   const startDrag = async (event: React.PointerEvent<HTMLDivElement>) => {
     if (mode === "detached" && event.button === 0) {
+      appendDebug("drag start");
       await appWindow.startDragging();
     }
   };
@@ -200,6 +282,7 @@ function App() {
     if (mode === "detached" && event.button === 0) {
       event.preventDefault();
       event.stopPropagation();
+      appendDebug("resize start");
       await appWindow.startResizeDragging("SouthEast");
     }
   };
@@ -207,9 +290,8 @@ function App() {
   return (
     <main
       ref={panelRef}
-      className={`widget widget-${mode} ${hovered ? "is-hovered" : ""}`}
+      className={`widget widget-${mode}`}
       onPointerMove={handlePointerMove}
-      onPointerLeave={handlePointerLeave}
       onClick={handleClick}
     >
       <section className="header">
@@ -217,6 +299,11 @@ function App() {
           <span className="mode-pill">{mode}</span>
           <h1>Wallpaper Widget Test</h1>
         </div>
+        <div
+          className={`drag-zone ${mode === "detached" ? "is-active" : ""}`}
+          onPointerDown={startDrag}
+          aria-hidden="true"
+        />
         <div className="actions">
           <button ref={switchButtonRef} className="primary" onClick={() => void switchMode()}>
             {mode === "attached" ? "Detach" : "Attach"}
@@ -253,17 +340,30 @@ function App() {
         <span>Visible {yesNo(diagnostics.visible)}</span>
         <span>Hosts {diagnostics.candidateCount}</span>
         <span>Worker 0x{diagnostics.workerW.toString(16)}</span>
+        <span>HWND {hex(diagnostics.hwnd)}</span>
+        <span>Parent {hex(diagnostics.parent)}</span>
+        <span>Style {diagnostics.styleHex}</span>
+        <span>Ex {diagnostics.exStyleHex}</span>
+        <span>Rect {rectText(diagnostics.windowRect)}</span>
+        <span>Client {rectText(diagnostics.clientRect)}</span>
+        <span>FG {yesNo(diagnostics.isForeground)}</span>
+        <span>Hook {yesNo(diagnostics.nativeHookInstalled)}</span>
+        <span>Native {diagnostics.nativeMsg}</span>
+        <span>Count {diagnostics.nativeCount}</span>
+        <span>Title "{diagnostics.title}"</span>
         <span className="diagnostic-error">{diagnostics.error ?? ""}</span>
+      </section>
+
+      <section className="debug-log">
+        {debugLines.map((line, index) => (
+          <div key={`${index}-${line}`}>{line}</div>
+        ))}
       </section>
 
       <p>
         attached is parented to WorkerW below desktop icons. detached is a normal
         frameless Tauri window. Both modes support click counting.
       </p>
-
-      {mode === "detached" && (
-        <div className="drag-surface" onPointerDown={startDrag} aria-hidden="true" />
-      )}
 
       {mode === "detached" && (
         <div className="resize-corner" onPointerDown={startResize} title="Resize" />
@@ -274,6 +374,20 @@ function App() {
 
 function yesNo(value: boolean) {
   return value ? "Y" : "N";
+}
+
+function hex(value?: number) {
+  if (!value) {
+    return "0x0";
+  }
+  return `0x${Math.trunc(value).toString(16)}`;
+}
+
+function rectText(rect?: AttachDiagnostics["windowRect"]) {
+  if (!rect) {
+    return "n/a";
+  }
+  return `${rect.left},${rect.top},${rect.width}x${rect.height}`;
 }
 
 createRoot(document.getElementById("root")!).render(

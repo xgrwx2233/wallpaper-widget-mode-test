@@ -18,8 +18,8 @@
       {
         "label": "widget",
         "title": "",
-        "width": 760,
-        "height": 420,
+        "width": 900,
+        "height": 560,
         "x": 220,
         "y": 120,
         "decorations": false,
@@ -27,7 +27,8 @@
         "skipTaskbar": true,
         "visible": false,
         "resizable": false,
-        "shadow": false
+        "shadow": false,
+        "focusable": false
       }
     ]
   },

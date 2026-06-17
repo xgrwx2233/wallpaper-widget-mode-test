@@ -1,4 +1,12 @@
-use std::{thread, time::Duration};
+use std::{
+    mem::transmute,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
+    thread,
+    time::Duration,
+};
 
 use serde::Serialize;
 use tauri::Runtime;
@@ -15,18 +23,22 @@ use windows::{
         UI::{
             Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST},
             WindowsAndMessaging::{
-                DestroyWindow, EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
-                GetWindowRect, IsWindowVisible, SendMessageTimeoutA, SetParent,
+                CallWindowProcW, DestroyWindow, EnumWindows, FindWindowA, FindWindowExA,
+                GetClassNameW, GetClientRect, GetForegroundWindow, GetParent, GetWindowLongPtrW,
+                GetWindowRect, GetWindowTextW, IsWindowVisible, SendMessageTimeoutA, SetParent,
                 SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-                SystemParametersInfoW, GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL,
+                SystemParametersInfoW, DefWindowProcW, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC,
+                HWND_BOTTOM, HWND_TOP, MA_NOACTIVATE, SMTO_NORMAL,
                 SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER,
                 SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
                 SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_BORDER,
                 WS_CHILD, WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
                 WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
-                WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX,
-                WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WM_SETREDRAW,
+                WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE,
+                WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WM_MOUSEACTIVATE, WM_NCACTIVATE,
+                WM_NCCALCSIZE, WM_NCPAINT, WM_SETREDRAW, WM_STYLECHANGED, WM_STYLECHANGING,
+                WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, STYLESTRUCT,
             },
         },
     },
@@ -34,6 +46,18 @@ use windows::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const WORKERW_SPAWN_MESSAGE: u32 = 0x052C;
+const DWMNCRP_DISABLED: i32 = 1;
+
+static ORIGINAL_WNDPROC: OnceLock<isize> = OnceLock::new();
+static NATIVE_FRAME_DEBUG: OnceLock<Mutex<NativeFrameDebug>> = OnceLock::new();
+static NATIVE_ATTACHED_MODE: AtomicBool = AtomicBool::new(false);
+
+#[derive(Default)]
+struct NativeFrameDebug {
+    count: u64,
+    last_message: String,
+    last_result: String,
+}
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,7 +73,30 @@ pub struct AttachDiagnostics {
     pub parent: isize,
     pub worker_w: isize,
     pub candidate_count: usize,
+    pub class_name: String,
+    pub title: String,
+    pub style_hex: String,
+    pub ex_style_hex: String,
+    pub window_rect: RectDiagnostics,
+    pub client_rect: RectDiagnostics,
+    pub foreground: isize,
+    pub is_foreground: bool,
+    pub native_hook_installed: bool,
+    pub native_msg: String,
+    pub native_count: u64,
+    pub phase: String,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RectDiagnostics {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 fn desktop_host_candidates() -> Result<Vec<HWND>> {
@@ -123,7 +170,10 @@ pub fn attach_to_desktop_icon_layer<R: Runtime>(window: &tauri::WebviewWindow<R>
     let mut attempted = Vec::new();
 
     unsafe {
-        set_child_window_style(hwnd);
+        NATIVE_ATTACHED_MODE.store(true, Ordering::Relaxed);
+        install_native_frame_guard(hwnd);
+        set_borderless_child_window_style(hwnd);
+        disable_dwm_non_client_rendering(hwnd);
 
         for candidate in candidates {
             if candidate.is_invalid() {
@@ -151,6 +201,15 @@ pub fn attach_to_desktop_icon_layer<R: Runtime>(window: &tauri::WebviewWindow<R>
                     | SWP_SHOWWINDOW,
             );
             let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+            );
 
             if GetParent(hwnd).ok() == Some(candidate) && IsWindowVisible(hwnd).as_bool() {
                 return Ok(());
@@ -169,8 +228,20 @@ pub fn detach_from_desktop_icon_layer<R: Runtime>(window: &tauri::WebviewWindow<
     let hwnd = HWND(window.hwnd()?.0);
 
     unsafe {
-        set_top_level_window_style(hwnd);
+        NATIVE_ATTACHED_MODE.store(false, Ordering::Relaxed);
+        install_native_frame_guard(hwnd);
+        set_borderless_top_level_window_style(hwnd);
+        disable_dwm_non_client_rendering(hwnd);
         let _ = SetParent(hwnd, None);
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+        );
         let _ = SetWindowPos(
             hwnd,
             Some(HWND_TOP),
@@ -191,6 +262,7 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
     let hwnd = HWND(window.hwnd()?.0);
 
     unsafe {
+        NATIVE_ATTACHED_MODE.store(false, Ordering::Relaxed);
         let old_parent = GetParent(hwnd).unwrap_or_default();
         let rect = current_window_rect(hwnd).map(expand_desktop_rect_for_nonclient_cache);
         let dirty_rect = rect.and_then(|rect| map_desktop_rect_to_window(old_parent, rect));
@@ -199,7 +271,8 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
         // bitmap. Stop new paints, hide, flush DWM, then redraw the exact old
         // area after removing the parent relationship.
         let _ = SendMessageW(hwnd, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0)));
-        remove_non_client_styles(hwnd, true);
+        set_borderless_top_level_window_style(hwnd);
+        disable_dwm_non_client_rendering(hwnd);
         let _ = ShowWindow(hwnd, SW_HIDE);
         let _ = SetWindowPos(
             hwnd,
@@ -273,6 +346,22 @@ pub fn attach_diagnostics<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Attac
 
     diagnostics.hwnd = hwnd.0 as isize;
 
+    unsafe {
+        fill_window_snapshot(hwnd, &mut diagnostics);
+    }
+
+    diagnostics.native_hook_installed = ORIGINAL_WNDPROC.get().is_some();
+    if let Some(debug) = NATIVE_FRAME_DEBUG.get().and_then(|state| state.lock().ok()) {
+        diagnostics.native_msg = debug.last_message.clone();
+        diagnostics.native_count = debug.count;
+    } else {
+        diagnostics.native_msg = if diagnostics.native_hook_installed {
+            "installed".to_string()
+        } else {
+            "not-installed".to_string()
+        };
+    }
+
     match desktop_host_candidates() {
         Ok(candidates) => unsafe {
             diagnostics.worker_found = true;
@@ -283,12 +372,19 @@ pub fn attach_diagnostics<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Attac
             diagnostics.parent_is_worker_w = candidates.contains(&parent);
             diagnostics.visible = IsWindowVisible(hwnd).as_bool();
             diagnostics.attached = diagnostics.parent_is_worker_w && diagnostics.visible;
+            fill_window_snapshot(hwnd, &mut diagnostics);
         },
         Err(error) => {
             diagnostics.error = Some(error.to_string());
         }
     }
 
+    diagnostics
+}
+
+pub fn debug_snapshot<R: Runtime>(phase: &str, window: &tauri::WebviewWindow<R>) -> AttachDiagnostics {
+    let mut diagnostics = attach_diagnostics(window);
+    diagnostics.phase = phase.to_string();
     diagnostics
 }
 
@@ -372,6 +468,55 @@ unsafe fn current_window_rect(hwnd: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
     GetWindowRect(hwnd, &mut rect).ok()?;
     Some(rect)
+}
+
+unsafe fn fill_window_snapshot(hwnd: HWND, diagnostics: &mut AttachDiagnostics) {
+    diagnostics.parent = GetParent(hwnd).unwrap_or_default().0 as isize;
+    diagnostics.visible = IsWindowVisible(hwnd).as_bool();
+    diagnostics.style_hex = format!("0x{:08X}", GetWindowLongPtrW(hwnd, GWL_STYLE) as u32);
+    diagnostics.ex_style_hex = format!("0x{:08X}", GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32);
+    diagnostics.class_name = get_class_name(hwnd);
+    diagnostics.title = get_window_title(hwnd);
+
+    let foreground = GetForegroundWindow();
+    diagnostics.foreground = foreground.0 as isize;
+    diagnostics.is_foreground = foreground == hwnd;
+
+    if let Some(rect) = current_window_rect(hwnd) {
+        diagnostics.window_rect = rect_to_diagnostics(rect);
+    }
+
+    let mut client_rect = RECT::default();
+    if GetClientRect(hwnd, &mut client_rect).is_ok() {
+        diagnostics.client_rect = rect_to_diagnostics(client_rect);
+    }
+}
+
+fn rect_to_diagnostics(rect: RECT) -> RectDiagnostics {
+    RectDiagnostics {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.right - rect.left,
+        height: rect.bottom - rect.top,
+    }
+}
+
+unsafe fn get_class_name(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 256];
+    let len = GetClassNameW(hwnd, &mut buffer);
+    utf16_slice_to_string(&buffer[..len.max(0) as usize])
+}
+
+unsafe fn get_window_title(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 256];
+    let len = GetWindowTextW(hwnd, &mut buffer);
+    utf16_slice_to_string(&buffer[..len.max(0) as usize])
+}
+
+fn utf16_slice_to_string(slice: &[u16]) -> String {
+    String::from_utf16_lossy(slice)
 }
 
 fn expand_desktop_rect_for_nonclient_cache(rect: RECT) -> RECT {
@@ -484,13 +629,8 @@ extern "system" fn enum_windows_refresh_desktop_windows(window: HWND, _state: LP
     BOOL(1)
 }
 
-unsafe fn set_child_window_style(hwnd: HWND) {
-    remove_non_client_styles(hwnd, false);
-}
-
-unsafe fn remove_non_client_styles(hwnd: HWND, remove_layered_flags: bool) {
+unsafe fn set_borderless_child_window_style(hwnd: HWND) {
     let _ = SetWindowTextW(hwnd, w!(""));
-
     let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     let next_style = (style as u32 | WS_CHILD.0 | WS_CLIPSIBLINGS.0 | WS_CLIPCHILDREN.0)
         & !WS_POPUP.0
@@ -504,18 +644,46 @@ unsafe fn remove_non_client_styles(hwnd: HWND, remove_layered_flags: bool) {
     SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
 
     let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    let mut next_ex_style = (ex_style as u32 | WS_EX_TOOLWINDOW.0)
+    let mut next_ex_style = (ex_style as u32 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0)
         & !WS_EX_APPWINDOW.0
         & !WS_EX_WINDOWEDGE.0
         & !WS_EX_CLIENTEDGE.0
         & !WS_EX_DLGMODALFRAME.0;
 
-    if remove_layered_flags {
-        next_ex_style &= !WS_EX_LAYERED.0;
-        next_ex_style &= !WS_EX_TRANSPARENT.0;
-    }
+    next_ex_style &= !WS_EX_LAYERED.0;
+    next_ex_style &= !WS_EX_TRANSPARENT.0;
 
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_ex_style as isize);
+    force_frame_refresh(hwnd);
+}
+
+unsafe fn set_borderless_top_level_window_style(hwnd: HWND) {
+    let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    let next_style = (style as u32 | WS_POPUP.0)
+        & !WS_CHILD.0
+        & !WS_CAPTION.0
+        & !WS_THICKFRAME.0
+        & !WS_SYSMENU.0
+        & !WS_MINIMIZEBOX.0
+        & !WS_MAXIMIZEBOX.0
+        & !WS_BORDER.0
+        & !WS_DLGFRAME.0;
+    SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
+
+    let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    let next_ex_style = (ex_style as u32 | WS_EX_TOOLWINDOW.0)
+        & !WS_EX_APPWINDOW.0
+        & !WS_EX_WINDOWEDGE.0
+        & !WS_EX_CLIENTEDGE.0
+        & !WS_EX_DLGMODALFRAME.0
+        & !WS_EX_LAYERED.0
+        & !WS_EX_TRANSPARENT.0
+        & !WS_EX_NOACTIVATE.0;
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_ex_style as isize);
+    force_frame_refresh(hwnd);
+}
+
+unsafe fn force_frame_refresh(hwnd: HWND) {
     let _ = SetWindowPos(
         hwnd,
         None,
@@ -527,9 +695,94 @@ unsafe fn remove_non_client_styles(hwnd: HWND, remove_layered_flags: bool) {
     );
 }
 
-unsafe fn set_top_level_window_style(hwnd: HWND) {
-    let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    let next_style = (style as u32 | WS_POPUP.0) & !WS_CHILD.0;
-    SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
+unsafe fn disable_dwm_non_client_rendering(hwnd: HWND) {
+    let policy = DWMNCRP_DISABLED;
+    let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+        hwnd,
+        windows::Win32::Graphics::Dwm::DWMWA_NCRENDERING_POLICY,
+        &policy as *const _ as *const core::ffi::c_void,
+        std::mem::size_of_val(&policy) as u32,
+    );
+}
+
+unsafe fn install_native_frame_guard(hwnd: HWND) {
+    if ORIGINAL_WNDPROC.get().is_some() {
+        return;
+    }
+
+    let previous = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, native_frame_guard_wnd_proc as *const () as isize);
+    let _ = ORIGINAL_WNDPROC.set(previous);
+    let _ = NATIVE_FRAME_DEBUG.set(Mutex::new(NativeFrameDebug::default()));
+}
+
+unsafe extern "system" fn native_frame_guard_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    let phase = format!("msg=0x{msg:04X} wp=0x{:X} lp=0x{:X}", wparam.0, lparam.0 as usize);
+
+    match msg {
+        WM_NCCALCSIZE => {
+            record_native_frame_debug(&phase, "return 0");
+            return windows::Win32::Foundation::LRESULT(0);
+        }
+        WM_NCPAINT | WM_NCACTIVATE => {
+            record_native_frame_debug(&phase, "suppress nonclient paint");
+            return windows::Win32::Foundation::LRESULT(0);
+        }
+        WM_MOUSEACTIVATE => {
+            if NATIVE_ATTACHED_MODE.load(Ordering::Relaxed) {
+                record_native_frame_debug(&phase, "MA_NOACTIVATE");
+                return windows::Win32::Foundation::LRESULT(MA_NOACTIVATE as isize);
+            }
+        }
+        WM_STYLECHANGING => {
+            if lparam.0 != 0 {
+                let style = &mut *(lparam.0 as *mut STYLESTRUCT);
+                style.styleNew &= !WS_CAPTION.0;
+                style.styleNew &= !WS_THICKFRAME.0;
+                style.styleNew &= !WS_SYSMENU.0;
+                style.styleNew &= !WS_MINIMIZEBOX.0;
+                style.styleNew &= !WS_MAXIMIZEBOX.0;
+                record_native_frame_debug(&phase, &format!("styleNew=0x{:08X}", style.styleNew));
+            }
+        }
+        WM_STYLECHANGED | WM_WINDOWPOSCHANGING | WM_WINDOWPOSCHANGED => {
+            record_native_frame_debug(&phase, "changed");
+        }
+        _ => {}
+    }
+
+    call_original_wnd_proc(hwnd, msg, wparam, lparam)
+}
+
+unsafe fn call_original_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    if let Some(previous) = ORIGINAL_WNDPROC.get().copied().filter(|value| *value != 0) {
+        let previous_proc: windows::Win32::UI::WindowsAndMessaging::WNDPROC =
+            transmute(previous);
+        let result = CallWindowProcW(previous_proc, hwnd, msg, wparam, lparam);
+        record_native_frame_debug(&format!("msg=0x{msg:04X}"), &format!("call original -> 0x{:X}", result.0 as isize));
+        return result;
+    }
+
+    let result = DefWindowProcW(hwnd, msg, wparam, lparam);
+    record_native_frame_debug(&format!("msg=0x{msg:04X}"), &format!("defproc -> 0x{:X}", result.0 as isize));
+    result
+}
+
+fn record_native_frame_debug(message: &str, result: &str) {
+    let debug = NATIVE_FRAME_DEBUG.get_or_init(|| Mutex::new(NativeFrameDebug::default()));
+    if let Ok(mut state) = debug.lock() {
+        state.count = state.count.saturating_add(1);
+        state.last_message = message.to_string();
+        state.last_result = result.to_string();
+    }
 }
 

@@ -12,7 +12,8 @@ use std::{
 
 use desktop_layer::{
     attach_diagnostics, attach_to_desktop_icon_layer, cleanup_desktop_layer_before_exit,
-    detach_from_desktop_icon_layer, is_attached_to_desktop_icon_layer, AttachDiagnostics,
+    debug_snapshot, detach_from_desktop_icon_layer, is_attached_to_desktop_icon_layer,
+    AttachDiagnostics,
 };
 use input_forwarder::start_input_forwarder;
 use tauri::{Emitter, Manager, Position, Size, State};
@@ -28,13 +29,19 @@ fn switch_to_attached(
     window: tauri::WebviewWindow,
     state: State<'_, ModeState>,
 ) -> Result<AttachDiagnostics, String> {
+    let _ = window.emit("debug-snapshot", debug_snapshot("switch_to_attached:before", &window));
+    window
+        .set_focusable(false)
+        .map_err(|error| error.to_string())?;
     window.set_resizable(false).map_err(|error| error.to_string())?;
     window
         .set_skip_taskbar(true)
         .map_err(|error| error.to_string())?;
     attach_to_desktop_icon_layer(&window).map_err(|error| error.to_string())?;
     state.attached.store(true, Ordering::Relaxed);
-    Ok(attach_diagnostics(&window))
+    let diagnostics = attach_diagnostics(&window);
+    let _ = window.emit("debug-snapshot", debug_snapshot("switch_to_attached:after", &window));
+    Ok(diagnostics)
 }
 
 #[tauri::command]
@@ -42,23 +49,31 @@ fn switch_to_detached(
     window: tauri::WebviewWindow,
     state: State<'_, ModeState>,
 ) -> Result<(), String> {
+    let _ = window.emit("debug-snapshot", debug_snapshot("switch_to_detached:before", &window));
     state.attached.store(false, Ordering::Relaxed);
     detach_from_desktop_icon_layer(&window).map_err(|error| error.to_string())?;
+    window
+        .set_focusable(true)
+        .map_err(|error| error.to_string())?;
     window.set_resizable(true).map_err(|error| error.to_string())?;
     window
         .set_skip_taskbar(false)
         .map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;
+    let _ = window.emit("debug-snapshot", debug_snapshot("switch_to_detached:after", &window));
     Ok(())
 }
 
 #[tauri::command]
 fn prepare_close_app(window: tauri::WebviewWindow, state: State<'_, ModeState>) {
     state.attached.store(false, Ordering::Relaxed);
+    let _ = window.emit("debug-snapshot", debug_snapshot("prepare_close_app:before", &window));
     let _ = detach_from_desktop_icon_layer(&window);
+    let _ = window.set_focusable(true);
     let _ = window.set_resizable(true);
     let _ = window.set_skip_taskbar(false);
     let _ = window.show();
+    let _ = window.emit("debug-snapshot", debug_snapshot("prepare_close_app:after", &window));
     let _ = window.emit("close-prepared", ());
 }
 
@@ -66,9 +81,12 @@ fn prepare_close_app(window: tauri::WebviewWindow, state: State<'_, ModeState>) 
 fn finish_close_app(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, ModeState>) {
     state.attached.store(false, Ordering::Relaxed);
     state.allow_exit.store(true, Ordering::Relaxed);
+    let _ = window.emit("debug-snapshot", debug_snapshot("finish_close_app:before", &window));
+    let _ = window.set_focusable(true);
     if !state.cleanup_done.swap(true, Ordering::Relaxed) {
         let _ = cleanup_desktop_layer_before_exit(&window);
     }
+    let _ = window.emit("debug-snapshot", debug_snapshot("finish_close_app:after", &window));
     let _ = window.hide();
     app.exit(0);
 }
@@ -76,6 +94,11 @@ fn finish_close_app(app: tauri::AppHandle, window: tauri::WebviewWindow, state: 
 #[tauri::command]
 fn get_attach_diagnostics(window: tauri::WebviewWindow) -> AttachDiagnostics {
     attach_diagnostics(&window)
+}
+
+#[tauri::command]
+fn get_debug_snapshot(window: tauri::WebviewWindow, phase: String) -> AttachDiagnostics {
+    debug_snapshot(&phase, &window)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -96,7 +119,8 @@ pub fn run() {
             switch_to_detached,
             prepare_close_app,
             finish_close_app,
-            get_attach_diagnostics
+            get_attach_diagnostics,
+            get_debug_snapshot
         ])
         .setup(move |app| {
             let window = app
@@ -108,16 +132,21 @@ pub fn run() {
                 y: 120,
             }))?;
             window.set_size(Size::Physical(tauri::PhysicalSize {
-                width: 760,
-                height: 420,
+                width: 900,
+                height: 560,
             }))?;
 
             if let Err(error) = attach_to_desktop_icon_layer(&window) {
                 eprintln!("initial desktop attach failed, starting detached: {error}");
                 attached_for_setup.store(false, Ordering::Relaxed);
                 let _ = detach_from_desktop_icon_layer(&window);
+                let _ = window.set_focusable(true);
                 let _ = window.set_resizable(true);
                 let _ = window.set_skip_taskbar(false);
+            } else {
+                let _ = window.set_focusable(false);
+                let _ = window.set_resizable(false);
+                let _ = window.set_skip_taskbar(true);
             }
 
             window.show()?;

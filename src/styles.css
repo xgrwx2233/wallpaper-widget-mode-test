@@ -19,8 +19,8 @@ body,
   height: 100vh;
   display: grid;
   grid-template-rows: auto auto auto auto;
-  gap: 16px;
-  padding: 22px;
+  gap: 14px;
+  padding: 18px 20px 16px;
   color: #f5f7f7;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 8px;
@@ -34,26 +34,23 @@ body,
   user-select: none;
 }
 
-.widget-detached {
-  padding-top: 48px;
-}
-
-.widget.is-hovered {
-  border-color: rgba(63, 205, 158, 0.86);
-  background:
-    linear-gradient(135deg, rgba(21, 55, 47, 0.78), rgba(45, 61, 57, 0.68)),
-    rgba(12, 18, 20, 0.46);
-}
-
-.drag-surface {
+.drag-zone {
   position: absolute;
-  inset: 0;
+  top: 6px;
+  left: 380px;
+  right: 282px;
+  height: 54px;
   background: transparent;
   cursor: grab;
   z-index: 0;
+  pointer-events: none;
 }
 
-.drag-surface:active {
+.drag-zone.is-active {
+  pointer-events: auto;
+}
+
+.drag-zone:active {
   cursor: grabbing;
 }
 
@@ -144,7 +141,7 @@ button.danger:hover {
 
 .status-item {
   min-width: 0;
-  height: 86px;
+  min-height: 78px;
   display: grid;
   align-content: center;
   gap: 4px;
@@ -195,6 +192,28 @@ button.danger:hover {
   color: rgba(255, 190, 120, 0.9);
 }
 
+.debug-log {
+  position: relative;
+  z-index: 1;
+  min-height: 120px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(245, 247, 247, 0.72);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: hidden;
+}
+
+.debug-log div {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 p {
   position: relative;
   z-index: 1;
@@ -202,7 +221,7 @@ p {
   color: rgba(245, 247, 247, 0.68);
   font-size: 13px;
   line-height: 1.45;
-  max-width: 680px;
+  max-width: 760px;
 }
 
 .resize-corner {
