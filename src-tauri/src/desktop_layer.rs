@@ -8,8 +8,9 @@ use windows::{
         Foundation::{HWND, LPARAM, POINT, RECT, WPARAM, MAX_PATH},
         Graphics::Dwm::DwmFlush,
         Graphics::Gdi::{
-            InvalidateRect, MapWindowPoints, RedrawWindow, UpdateWindow, RDW_ALLCHILDREN,
-            RDW_ERASE, RDW_ERASENOW, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+            GdiFlush, GetDC, InvalidateRect, MapWindowPoints, PaintDesktop, RedrawWindow,
+            ReleaseDC, UpdateWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_ERASENOW, RDW_FRAME,
+            RDW_INVALIDATE, RDW_UPDATENOW,
         },
         UI::{
             Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST},
@@ -217,10 +218,17 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
         thread::sleep(Duration::from_millis(180));
 
         let _ = DestroyWindow(hwnd);
+        let _ = GdiFlush();
+        let _ = DwmFlush();
         thread::sleep(Duration::from_millis(120));
+        paint_desktop_background(old_parent);
         refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
         refresh_desktop_shell(Some(old_parent), None);
+        kick_progman_worker_w();
+        thread::sleep(Duration::from_millis(150));
+        refresh_desktop_shell(Some(old_parent), None);
         refresh_current_wallpaper();
+        let _ = GdiFlush();
         let _ = DwmFlush();
     }
 
@@ -323,6 +331,41 @@ unsafe fn refresh_desktop_shell(old_parent: Option<HWND>, dirty_rect: Option<&RE
 
     EnumWindows(Some(enum_windows_refresh_desktop_windows), LPARAM(0)).ok();
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+}
+
+unsafe fn kick_progman_worker_w() {
+    let progman = FindWindowA(s!("Progman"), None).unwrap_or_default();
+    if progman.is_invalid() {
+        return;
+    }
+
+    for (wparam, lparam) in [(0xD, 0x1), (0, 0)] {
+        let _ = SendMessageTimeoutA(
+            progman,
+            WORKERW_SPAWN_MESSAGE,
+            WPARAM(wparam),
+            LPARAM(lparam),
+            SMTO_NORMAL,
+            1000,
+            None,
+        );
+        thread::sleep(Duration::from_millis(80));
+    }
+}
+
+unsafe fn paint_desktop_background(hwnd: HWND) {
+    if hwnd.is_invalid() {
+        return;
+    }
+
+    let hdc = GetDC(Some(hwnd));
+    if hdc.is_invalid() {
+        return;
+    }
+
+    let _ = PaintDesktop(hdc);
+    let _ = ReleaseDC(Some(hwnd), hdc);
+    let _ = GdiFlush();
 }
 
 unsafe fn current_window_rect(hwnd: HWND) -> Option<RECT> {
