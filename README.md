@@ -1,5 +1,11 @@
 # Wallpaper Widget Mode Test
 
+## 技术总结
+
+- [Windows 壁纸小挂件实现总结](docs/windows-wallpaper-widget-implementation-notes.md)
+
+该文档整理了 Win10 / Win11 下通过 Tauri 将同一个窗口 attach 到 WorkerW 壁纸层的实现方式、无边框透明窗口注意事项、Win10 标题栏残影和退出残影的修复过程，以及后续复用时的测试清单。
+
 Tauri v2 Windows 测试项目，用于验证壁纸小挂件的两种模式：
 
 - `attached`：窗口挂到 Explorer `WorkerW`，显示在壁纸上、桌面图标下。
