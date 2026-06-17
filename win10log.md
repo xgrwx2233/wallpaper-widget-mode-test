@@ -1,34 +1,28 @@
-PS C:\Users\Administrator> cd D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test\
-PS D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test> git pull
-fatal: unable to access 'https://github.com/xgrwx2233/wallpaper-widget-mode-test.git/': Connection timed out after 300022 milliseconds
-PS D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test> git pull
-fatal: unable to access 'https://github.com/xgrwx2233/wallpaper-widget-mode-test.git/': Recv failure: Connection was reset
-PS D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test> git pull
-fatal: unable to access 'https://github.com/xgrwx2233/wallpaper-widget-mode-test.git/': Recv failure: Connection was reset
-PS D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test> git clone https://github.com/xgrwx2233/wallpaper-widget-mode-test.git
-Cloning into 'wallpaper-widget-mode-test'...
-fatal: unable to access 'https://github.com/xgrwx2233/wallpaper-widget-mode-test.git/': Failed to connect to github.com port 443 after 21071 ms: Could not connect to server
-PS D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test> npm install
-npm : 无法加载文件 D:\Program Files\nodejs\npm.ps1，因为在此系统上禁止运行脚本。有关详细信息，请参阅 https:/go.microsoft.com/fwlink/?LinkID=135170 中的 about_Execution_Policies。
-所在位置 行:1 字符: 1
-+ npm install
-+ ~~~
-    + CategoryInfo          : SecurityError: (:) []，PSSecurityException
-    + FullyQualifiedErrorId : UnauthorizedAccess
-PS D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test> npm
-npm : 无法加载文件 D:\Program Files\nodejs\npm.ps1，因为在此系统上禁止运行脚本。有关详细信息，请参阅 https:/go.microsoft.com/fwlink/?LinkID=135170 中的 about_Execution_Policies。
-所在位置 行:1 字符: 1
-+ npm
-+ ~~~
-    + CategoryInfo          : SecurityError: (:) []，PSSecurityException
-    + FullyQualifiedErrorId : UnauthorizedAccess
-PS D:\Users\xgrwx\Downloads\wallpaper-widget-mode-test> node
-Welcome to Node.js v24.16.0.
-Type ".help" for more information.
-> exit
-Uncaught ReferenceError: exit is not defined
-> quit
-Uncaught ReferenceError: quit is not defined
-> exit()
-Uncaught ReferenceError: exit is not defined
->
+ Compiling version_check v0.9.5                           
+   Compiling zmij v1.0.21                                   
+node:internal/fs/watchers:321           ] 28/446: cc, ser…
+    const error = new UVException({
+                  ^
+
+Error: EBUSY: resource busy or locked, watch 'D:\Users\xgrwx\Downloads\teacher-schedule-widget\src-tauri\target\debug\build\zmij-bbaef9d295c9b9a4\build_script_build-bbaef9d295c9b9a4.exe'
+    at FSWatcher.<computed> (node:internal/fs/watchers:321:19)
+    at Object.watch (node:fs:2548:36)
+    at createFsWatchInstance (file:///D:/Users/xgrwx/Downloads/teacher-schedule-widget/node_modules/vite/dist/node/chunks/config.js:12958:16)
+    at setFsWatchListener (file:///D:/Users/xgrwx/Downloads/teacher-schedule-widget/node_modules/vite/dist/node/chunks/config.js:13000:14)
+    at NodeFsHandler$1._watchWithNodeFs (file:///D:/Users/xgrwx/Downloads/teacher-schedule-widget/node_modules/vite/dist/node/chunks/config.js:13114:20)
+    at NodeFsHandler$1._handleFile (file:///D:/Users/xgrwx/Downloads/teacher-schedule-widget/node_modules/vite/dist/node/chunks/config.js:13158:24)
+    at NodeFsHandler$1._addToNodeFs (file:///D:/Users/xgrwx/Downloads/teacher-schedule-widget/node_modules/vite/dist/node/chunks/config.js:13332:26)
+Emitted 'error' event on FSWatcher instance at:
+    at FSWatcher._handleError (file:///D:/Users/xgrwx/Downloads/teacher-schedule-widget/node_modules/vite/dist/node/chunks/config.js:14133:148)
+    at NodeFsHandler$1._addToNodeFs (file:///D:/Users/xgrwx/Downloads/teacher-schedule-widget/node_modules/vite/dist/node/chunks/config.js:13337:18) {
+  errno: -4082,
+  syscall: 'watch',
+  code: 'EBUSY',
+  path: 'D:\\Users\\xgrwx\\Downloads\\teacher-schedule-widget\\src-tauri\\target\\debug\\build\\zmij-bbaef9d295c9b9a4\\build_script_build-bbaef9d295c9b9a4.exe',
+  filename: 'D:\\Users\\xgrwx\\Downloads\\teacher-schedule-widget\\src-tauri\\target\\debug\\build\\zmij-bbaef9d295c9b9a4\\build_script_build-bbaef9d295c9b9a4.exe'
+}
+
+Node.js v24.16.0
+   Compiling smallvec v1.15.1                               
+       Error The "beforeDevCommand" terminated with a non-zero status code.
+PS D:\Users\xgrwx\Downloads\teacher-schedule-widget> 
