@@ -3,7 +3,7 @@ use std::{thread, time::Duration};
 use serde::Serialize;
 use tauri::Runtime;
 use windows::{
-    core::{s, BOOL},
+    core::{s, w, BOOL},
     Win32::{
         Foundation::{HWND, LPARAM, POINT, RECT, WPARAM, MAX_PATH},
         Graphics::Dwm::DwmFlush,
@@ -16,10 +16,10 @@ use windows::{
             WindowsAndMessaging::{
                 DestroyWindow, EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
                 GetWindowRect, IsWindowVisible, SendMessageTimeoutA, SetParent,
-                SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW,
-                GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SPIF_SENDCHANGE,
-                SPIF_UPDATEINIFILE, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER, SWP_FRAMECHANGED,
-                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+                SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+                SystemParametersInfoW, GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL,
+                SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER,
+                SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
                 SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_BORDER,
                 WS_CHILD, WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
                 WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
@@ -212,12 +212,14 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
         let _ = DwmFlush();
 
         refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
+        refresh_desktop_shell(Some(old_parent), None);
         let _ = DwmFlush();
         thread::sleep(Duration::from_millis(180));
 
         let _ = DestroyWindow(hwnd);
         thread::sleep(Duration::from_millis(120));
         refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
+        refresh_desktop_shell(Some(old_parent), None);
         refresh_current_wallpaper();
         let _ = DwmFlush();
     }
@@ -444,6 +446,8 @@ unsafe fn set_child_window_style(hwnd: HWND) {
 }
 
 unsafe fn remove_non_client_styles(hwnd: HWND, remove_layered_flags: bool) {
+    let _ = SetWindowTextW(hwnd, w!(""));
+
     let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     let next_style = (style as u32 | WS_CHILD.0 | WS_CLIPSIBLINGS.0 | WS_CLIPCHILDREN.0)
         & !WS_POPUP.0
