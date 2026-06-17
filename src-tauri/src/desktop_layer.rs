@@ -208,36 +208,20 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
         );
         let _ = DwmFlush();
 
+        set_borderless_top_level_window_style(hwnd);
         let _ = SetParent(hwnd, None);
-        set_top_level_window_style(hwnd);
-
-        if let Some(rect) = rect {
-            let width = (rect.right - rect.left).max(1);
-            let height = (rect.bottom - rect.top).max(1);
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOP),
-                rect.left,
-                rect.top,
-                width,
-                height,
-                SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE,
-            );
-            refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
-            thread::sleep(Duration::from_millis(120));
-
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOP),
-                -32000,
-                -32000,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOACTIVATE,
-            );
-            refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
-            thread::sleep(Duration::from_millis(120));
-        }
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            -32000,
+            -32000,
+            0,
+            0,
+            SWP_HIDEWINDOW | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+        );
+        refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
+        let _ = DwmFlush();
+        thread::sleep(Duration::from_millis(180));
 
         let _ = ShowWindow(hwnd, SW_HIDE);
         let _ = SetWindowPos(
@@ -478,5 +462,17 @@ unsafe fn set_child_window_style(hwnd: HWND) {
 unsafe fn set_top_level_window_style(hwnd: HWND) {
     let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     let next_style = (style as u32 | WS_POPUP.0) & !WS_CHILD.0;
+    SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
+}
+
+unsafe fn set_borderless_top_level_window_style(hwnd: HWND) {
+    let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    let next_style = (style as u32 | WS_POPUP.0)
+        & !WS_CHILD.0
+        & !WS_CAPTION.0
+        & !WS_THICKFRAME.0
+        & !WS_SYSMENU.0
+        & !WS_MINIMIZEBOX.0
+        & !WS_MAXIMIZEBOX.0;
     SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
 }
