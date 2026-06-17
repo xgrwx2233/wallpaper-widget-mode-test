@@ -20,6 +20,7 @@ use tauri::{Emitter, Manager, Position, Size, State};
 struct ModeState {
     attached: Arc<AtomicBool>,
     allow_exit: Arc<AtomicBool>,
+    cleanup_done: Arc<AtomicBool>,
 }
 
 #[tauri::command]
@@ -61,7 +62,9 @@ fn prepare_close_app(window: tauri::WebviewWindow, state: State<'_, ModeState>) 
 fn finish_close_app(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, ModeState>) {
     state.attached.store(false, Ordering::Relaxed);
     state.allow_exit.store(true, Ordering::Relaxed);
-    let _ = cleanup_desktop_layer_before_exit(&window);
+    if !state.cleanup_done.swap(true, Ordering::Relaxed) {
+        let _ = cleanup_desktop_layer_before_exit(&window);
+    }
     let _ = window.hide();
     app.exit(0);
 }
@@ -75,12 +78,14 @@ fn get_attach_diagnostics(window: tauri::WebviewWindow) -> AttachDiagnostics {
 pub fn run() {
     let attached = Arc::new(AtomicBool::new(true));
     let allow_exit = Arc::new(AtomicBool::new(false));
+    let cleanup_done = Arc::new(AtomicBool::new(false));
     let attached_for_setup = Arc::clone(&attached);
 
     tauri::Builder::default()
         .manage(ModeState {
             attached: Arc::clone(&attached),
             allow_exit: Arc::clone(&allow_exit),
+            cleanup_done: Arc::clone(&cleanup_done),
         })
         .invoke_handler(tauri::generate_handler![
             switch_to_attached,
@@ -103,8 +108,6 @@ pub fn run() {
                 height: 420,
             }))?;
 
-            window.show()?;
-
             if let Err(error) = attach_to_desktop_icon_layer(&window) {
                 eprintln!("initial desktop attach failed, starting detached: {error}");
                 attached_for_setup.store(false, Ordering::Relaxed);
@@ -112,6 +115,8 @@ pub fn run() {
                 let _ = window.set_resizable(true);
                 let _ = window.set_skip_taskbar(false);
             }
+
+            window.show()?;
 
             start_input_forwarder(window.clone(), Arc::clone(&attached_for_setup));
             start_desktop_layer_guard(window, Arc::clone(&attached_for_setup));
@@ -132,7 +137,9 @@ pub fn run() {
                     state.attached.store(false, Ordering::Relaxed);
                     state.allow_exit.store(true, Ordering::Relaxed);
                     if let Some(window) = app_handle.get_webview_window("widget") {
-                        let _ = cleanup_desktop_layer_before_exit(&window);
+                        if !state.cleanup_done.swap(true, Ordering::Relaxed) {
+                            let _ = cleanup_desktop_layer_before_exit(&window);
+                        }
                         let _ = window.hide();
                     }
                 }
@@ -142,7 +149,10 @@ pub fn run() {
                 if !allow_exit.load(Ordering::Relaxed) {
                     api.prevent_exit();
                 } else if let Some(window) = app_handle.get_webview_window("widget") {
-                    let _ = cleanup_desktop_layer_before_exit(&window);
+                    let state = app_handle.state::<ModeState>();
+                    if !state.cleanup_done.swap(true, Ordering::Relaxed) {
+                        let _ = cleanup_desktop_layer_before_exit(&window);
+                    }
                     let _ = window.hide();
                 }
             }

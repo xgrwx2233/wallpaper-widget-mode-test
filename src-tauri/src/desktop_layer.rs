@@ -17,13 +17,15 @@ use windows::{
                 DestroyWindow, EnumWindows, FindWindowA, FindWindowExA, GetParent, GetWindowLongPtrW,
                 GetWindowRect, IsWindowVisible, SendMessageTimeoutA, SetParent,
                 SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW,
-                GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SPIF_SENDCHANGE,
+                GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, HWND_TOP, SMTO_NORMAL, SPIF_SENDCHANGE,
                 SPIF_UPDATEINIFILE, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER, SWP_FRAMECHANGED,
                 SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_CHILD,
-                WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-                WS_POPUP, WS_SYSMENU, WS_THICKFRAME, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-                WM_SETREDRAW,
+                SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WS_BORDER,
+                WS_CHILD, WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
+                WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
+                WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX,
+                WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WM_SETREDRAW,
             },
         },
     },
@@ -189,13 +191,14 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
 
     unsafe {
         let old_parent = GetParent(hwnd).unwrap_or_default();
-        let rect = current_window_rect(hwnd);
+        let rect = current_window_rect(hwnd).map(expand_desktop_rect_for_nonclient_cache);
         let dirty_rect = rect.and_then(|rect| map_desktop_rect_to_window(old_parent, rect));
 
         // Win10 can keep the final WorkerW child frame as a stale wallpaper
         // bitmap. Stop new paints, hide, flush DWM, then redraw the exact old
         // area after removing the parent relationship.
         let _ = SendMessageW(hwnd, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0)));
+        remove_non_client_styles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_HIDE);
         let _ = SetWindowPos(
             hwnd,
@@ -208,35 +211,15 @@ pub fn cleanup_desktop_layer_before_exit<R: Runtime>(
         );
         let _ = DwmFlush();
 
-        set_borderless_top_level_window_style(hwnd);
-        let _ = SetParent(hwnd, None);
-        let _ = SetWindowPos(
-            hwnd,
-            Some(HWND_TOP),
-            -32000,
-            -32000,
-            0,
-            0,
-            SWP_HIDEWINDOW | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
-        );
         refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
         let _ = DwmFlush();
         thread::sleep(Duration::from_millis(180));
 
-        let _ = ShowWindow(hwnd, SW_HIDE);
-        let _ = SetWindowPos(
-            hwnd,
-            Some(HWND_TOP),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW,
-        );
+        let _ = DestroyWindow(hwnd);
+        thread::sleep(Duration::from_millis(120));
         refresh_desktop_shell(Some(old_parent), dirty_rect.as_ref());
         refresh_current_wallpaper();
         let _ = DwmFlush();
-        let _ = DestroyWindow(hwnd);
     }
 
     Ok(())
@@ -346,6 +329,15 @@ unsafe fn current_window_rect(hwnd: HWND) -> Option<RECT> {
     Some(rect)
 }
 
+fn expand_desktop_rect_for_nonclient_cache(rect: RECT) -> RECT {
+    RECT {
+        left: rect.left - 8,
+        top: rect.top - 64,
+        right: rect.right + 8,
+        bottom: rect.bottom + 8,
+    }
+}
+
 unsafe fn map_desktop_rect_to_window(hwnd: HWND, rect: RECT) -> Option<RECT> {
     if hwnd.is_invalid() {
         return None;
@@ -448,6 +440,10 @@ extern "system" fn enum_windows_refresh_desktop_windows(window: HWND, _state: LP
 }
 
 unsafe fn set_child_window_style(hwnd: HWND) {
+    remove_non_client_styles(hwnd, false);
+}
+
+unsafe fn remove_non_client_styles(hwnd: HWND, remove_layered_flags: bool) {
     let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     let next_style = (style as u32 | WS_CHILD.0 | WS_CLIPSIBLINGS.0 | WS_CLIPCHILDREN.0)
         & !WS_POPUP.0
@@ -455,8 +451,33 @@ unsafe fn set_child_window_style(hwnd: HWND) {
         & !WS_THICKFRAME.0
         & !WS_SYSMENU.0
         & !WS_MINIMIZEBOX.0
-        & !WS_MAXIMIZEBOX.0;
+        & !WS_MAXIMIZEBOX.0
+        & !WS_BORDER.0
+        & !WS_DLGFRAME.0;
     SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
+
+    let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    let mut next_ex_style = (ex_style as u32 | WS_EX_TOOLWINDOW.0)
+        & !WS_EX_APPWINDOW.0
+        & !WS_EX_WINDOWEDGE.0
+        & !WS_EX_CLIENTEDGE.0
+        & !WS_EX_DLGMODALFRAME.0;
+
+    if remove_layered_flags {
+        next_ex_style &= !WS_EX_LAYERED.0;
+        next_ex_style &= !WS_EX_TRANSPARENT.0;
+    }
+
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_ex_style as isize);
+    let _ = SetWindowPos(
+        hwnd,
+        None,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+    );
 }
 
 unsafe fn set_top_level_window_style(hwnd: HWND) {
@@ -465,14 +486,3 @@ unsafe fn set_top_level_window_style(hwnd: HWND) {
     SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
 }
 
-unsafe fn set_borderless_top_level_window_style(hwnd: HWND) {
-    let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    let next_style = (style as u32 | WS_POPUP.0)
-        & !WS_CHILD.0
-        & !WS_CAPTION.0
-        & !WS_THICKFRAME.0
-        & !WS_SYSMENU.0
-        & !WS_MINIMIZEBOX.0
-        & !WS_MAXIMIZEBOX.0;
-    SetWindowLongPtrW(hwnd, GWL_STYLE, next_style as isize);
-}
