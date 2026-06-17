@@ -101,7 +101,7 @@ function App() {
     const closeUnlistenPromise = listen("close-prepared", () => {
       setMode("detached");
       setLastEvent("closing");
-      scheduleFinishClose(180);
+      scheduleFinishClose(1200);
     });
 
     return () => {
@@ -140,7 +140,8 @@ function App() {
     closingRef.current = true;
     setLastEvent("closing");
     await invoke("prepare_close_app");
-    scheduleFinishClose(320);
+    setMode("detached");
+    scheduleFinishClose(1200);
   };
 
   const scheduleFinishClose = (delay: number) => {
