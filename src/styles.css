@@ -45,25 +45,21 @@ body,
     rgba(12, 18, 20, 0.46);
 }
 
-.drag-strip {
+.drag-surface {
   position: absolute;
-  inset: 0 0 auto;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  color: rgba(245, 247, 247, 0.64);
-  background: rgba(255, 255, 255, 0.08);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 12px;
+  inset: 0;
+  background: transparent;
   cursor: grab;
+  z-index: 0;
 }
 
-.drag-strip:active {
+.drag-surface:active {
   cursor: grabbing;
 }
 
 .header {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   display: flex;
   justify-content: space-between;
@@ -137,6 +133,8 @@ button.danger:hover {
 }
 
 .status-grid {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -175,6 +173,8 @@ button.danger:hover {
 }
 
 .diagnostics {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -196,6 +196,8 @@ button.danger:hover {
 }
 
 p {
+  position: relative;
+  z-index: 1;
   margin: 0;
   color: rgba(245, 247, 247, 0.68);
   font-size: 13px;

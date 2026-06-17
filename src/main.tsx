@@ -212,12 +212,6 @@ function App() {
       onPointerLeave={handlePointerLeave}
       onClick={handleClick}
     >
-      {mode === "detached" && (
-        <div className="drag-strip" onPointerDown={startDrag}>
-          Drag window
-        </div>
-      )}
-
       <section className="header">
         <div>
           <span className="mode-pill">{mode}</span>
@@ -266,6 +260,10 @@ function App() {
         attached is parented to WorkerW below desktop icons. detached is a normal
         frameless Tauri window. Both modes support click counting.
       </p>
+
+      {mode === "detached" && (
+        <div className="drag-surface" onPointerDown={startDrag} aria-hidden="true" />
+      )}
 
       {mode === "detached" && (
         <div className="resize-corner" onPointerDown={startResize} title="Resize" />
